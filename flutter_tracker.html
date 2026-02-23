@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Flutter Ultra Pro Roadmap</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body { background: #070B14; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0D1117; }
+    ::-webkit-scrollbar-thumb { background: #1E2A3A; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <canvas id="fx-canvas" style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:0;"></canvas>
+  <div id="root" style="position:relative;z-index:1;"></div>
+  <script>
+  (function() {
+    const canvas = document.getElementById("fx-canvas");
+    const ctx = canvas.getContext("2d");
+    let W = canvas.width = window.innerWidth;
+    let H = canvas.height = window.innerHeight;
+    window.addEventListener("resize", () => { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; });
+
+    const COLORS = ["#00E5FF","#7C4DFF","#FF4081","#00BFA5","#F9A825","#E040FB"];
+
+    let mouse = { x: W/2, y: H/2, vx: 0, vy: 0, px: W/2, py: H/2 };
+    let particles = [];
+    let ripples = [];
+    let trail = [];
+    let clicks = [];
+    let scanLines = [];
+    let frame = 0;
+
+    window.addEventListener("mousemove", e => {
+      mouse.vx = e.clientX - mouse.x;
+      mouse.vy = e.clientY - mouse.y;
+      mouse.px = mouse.x; mouse.py = mouse.y;
+      mouse.x = e.clientX; mouse.y = e.clientY;
+      trail.push({ x: mouse.x, y: mouse.y, age: 0, color: COLORS[Math.floor(Math.random()*COLORS.length)] });
+      if (trail.length > 60) trail.shift();
+      if (Math.random() < 0.3) spawnParticle(mouse.x, mouse.y, "move");
+    });
+
+    window.addEventListener("click", e => {
+      mouse.x = e.clientX; mouse.y = e.clientY;
+      for (let i = 0; i < 22; i++) spawnParticle(e.clientX, e.clientY, "click");
+      ripples.push({ x: e.clientX, y: e.clientY, r: 0, max: 180, age: 0 });
+      ripples.push({ x: e.clientX, y: e.clientY, r: 0, max: 90, age: 0.08 });
+      clicks.push({ x: e.clientX, y: e.clientY, age: 0 });
+      scanLines.push({ y: e.clientY, age: 0 });
+    });
+
+    // touch support
+    window.addEventListener("touchmove", e => {
+      const t = e.touches[0];
+      mouse.vx = t.clientX - mouse.x; mouse.vy = t.clientY - mouse.y;
+      mouse.x = t.clientX; mouse.y = t.clientY;
+      trail.push({ x: mouse.x, y: mouse.y, age: 0, color: COLORS[Math.floor(Math.random()*COLORS.length)] });
+      if (trail.length > 60) trail.shift();
+      if (Math.random() < 0.4) spawnParticle(mouse.x, mouse.y, "move");
+    }, { passive: true });
+
+    window.addEventListener("touchstart", e => {
+      const t = e.touches[0];
+      for (let i = 0; i < 18; i++) spawnParticle(t.clientX, t.clientY, "click");
+      ripples.push({ x: t.clientX, y: t.clientY, r: 0, max: 160, age: 0 });
+      clicks.push({ x: t.clientX, y: t.clientY, age: 0 });
+      scanLines.push({ y: t.clientY, age: 0 });
+    }, { passive: true });
+
+    function spawnParticle(x, y, type) {
+      const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+      const speed = type === "click" ? 3 + Math.random() * 5 : 0.5 + Math.random() * 2;
+      const angle = type === "click" ? Math.random() * Math.PI * 2 : Math.atan2(mouse.vy, mouse.vx) + (Math.random() - 0.5) * 1.2;
+      particles.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        size: type === "click" ? 2 + Math.random() * 4 : 1 + Math.random() * 2,
+        life: 1,
+        decay: type === "click" ? 0.018 + Math.random() * 0.012 : 0.03 + Math.random() * 0.02,
+        color,
+        shape: Math.random() < 0.3 ? "square" : "circle",
+      });
+    }
+
+    // Grid nodes near cursor
+    const GRID_SPACING = 64;
+    const GRID_COLS = Math.ceil(window.innerWidth / GRID_SPACING) + 2;
+    const GRID_ROWS = Math.ceil(window.innerHeight / GRID_SPACING) + 2;
+
+    function draw() {
+      frame++;
+      ctx.clearRect(0, 0, W, H);
+
+      // ── 1. GRID with cursor magnetic distortion ──
+      const gCols = Math.ceil(W / GRID_SPACING) + 2;
+      const gRows = Math.ceil(H / GRID_SPACING) + 2;
+      ctx.save();
+      for (let gy = 0; gy < gRows; gy++) {
+        for (let gx = 0; gx < gCols; gx++) {
+          const bx = gx * GRID_SPACING;
+          const by = gy * GRID_SPACING;
+          const dx = bx - mouse.x, dy = by - mouse.y;
+          const dist = Math.sqrt(dx*dx + dy*dy);
+          const influence = Math.max(0, 1 - dist / 200);
+          const px = bx - (dx / (dist + 1)) * influence * 30;
+          const py = by - (dy / (dist + 1)) * influence * 30;
+          const alpha = 0.03 + influence * 0.18;
+          const size = 1 + influence * 3;
+          ctx.beginPath();
+          ctx.arc(px, py, size * 0.6, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(0,229,255,${alpha})`;
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+
+      // ── 2. CURSOR GLOW ──
+      const glowR = 140 + Math.sin(frame * 0.05) * 20;
+      const grd = ctx.createRadialGradient(mouse.x, mouse.y, 0, mouse.x, mouse.y, glowR);
+      grd.addColorStop(0, "rgba(0,229,255,0.07)");
+      grd.addColorStop(0.5, "rgba(124,77,255,0.03)");
+      grd.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.beginPath();
+      ctx.arc(mouse.x, mouse.y, glowR, 0, Math.PI * 2);
+      ctx.fillStyle = grd;
+      ctx.fill();
+
+      // ── 3. TRAIL ──
+      for (let i = 0; i < trail.length; i++) {
+        const t = trail[i];
+        t.age++;
+        const prog = i / trail.length;
+        const alpha = prog * 0.6 * (1 - t.age / 80);
+        if (alpha <= 0) continue;
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, (1 + prog * 3), 0, Math.PI * 2);
+        ctx.fillStyle = t.color.replace(")", `,${alpha})`).replace("rgb", "rgba").replace("#", "rgba(").replace(/([0-9a-f]{2})/gi, (m) => parseInt(m,16) + ",").slice(0,-1) + `)`;
+        // simpler hex to rgba:
+        const hex = t.color.replace("#","");
+        const r2 = parseInt(hex.substring(0,2),16), g2 = parseInt(hex.substring(2,4),16), b2 = parseInt(hex.substring(4,6),16);
+        ctx.fillStyle = `rgba(${r2},${g2},${b2},${alpha})`;
+        ctx.fill();
+      }
+      trail = trail.filter(t => t.age < 80);
+
+      // ── 4. PARTICLES ──
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx; p.y += p.vy;
+        p.vx *= 0.94; p.vy *= 0.94;
+        p.life -= p.decay;
+        if (p.life <= 0) { particles.splice(i, 1); continue; }
+        const hex2 = p.color.replace("#","");
+        const r3 = parseInt(hex2.substring(0,2),16), g3 = parseInt(hex2.substring(2,4),16), b3 = parseInt(hex2.substring(4,6),16);
+        ctx.globalAlpha = p.life;
+        if (p.shape === "square") {
+          ctx.fillStyle = `rgb(${r3},${g3},${b3})`;
+          ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+        } else {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fillStyle = `rgb(${r3},${g3},${b3})`;
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+
+      // ── 5. RIPPLES ──
+      for (let i = ripples.length - 1; i >= 0; i--) {
+        const rp = ripples[i];
+        if (rp.age > 0) { rp.age -= 0.016; continue; }
+        rp.r += (rp.max - rp.r) * 0.06 + 2;
+        const prog2 = rp.r / rp.max;
+        const alpha2 = (1 - prog2) * 0.5;
+        ctx.beginPath();
+        ctx.arc(rp.x, rp.y, rp.r, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(0,229,255,${alpha2})`;
+        ctx.lineWidth = 1.5 * (1 - prog2);
+        ctx.stroke();
+        if (rp.r >= rp.max * 0.97) ripples.splice(i, 1);
+      }
+
+      // ── 6. CLICK IMPACT FLASH ──
+      for (let i = clicks.length - 1; i >= 0; i--) {
+        const cl = clicks[i];
+        cl.age += 0.08;
+        if (cl.age >= 1) { clicks.splice(i, 1); continue; }
+        const alpha3 = (1 - cl.age) * 0.35;
+        const r4 = 20 + cl.age * 60;
+        const g4 = ctx.createRadialGradient(cl.x, cl.y, 0, cl.x, cl.y, r4);
+        g4.addColorStop(0, `rgba(255,255,255,${alpha3})`);
+        g4.addColorStop(1, "rgba(0,229,255,0)");
+        ctx.beginPath();
+        ctx.arc(cl.x, cl.y, r4, 0, Math.PI * 2);
+        ctx.fillStyle = g4;
+        ctx.fill();
+      }
+
+      // ── 7. SCAN LINES on click ──
+      for (let i = scanLines.length - 1; i >= 0; i--) {
+        const sl = scanLines[i];
+        sl.age += 0.04;
+        if (sl.age >= 1) { scanLines.splice(i, 1); continue; }
+        const alpha4 = (1 - sl.age) * 0.12;
+        ctx.fillStyle = `rgba(0,229,255,${alpha4})`;
+        ctx.fillRect(0, sl.y - 1, W, 2);
+        // two secondary lines
+        const off = sl.age * 80;
+        ctx.fillStyle = `rgba(0,229,255,${alpha4 * 0.5})`;
+        ctx.fillRect(0, sl.y - off, W, 1);
+        ctx.fillRect(0, sl.y + off, W, 1);
+      }
+
+      // ── 8. CROSSHAIR cursor indicator ──
+      const cs = 10 + Math.sin(frame * 0.08) * 2;
+      const ca = 0.4;
+      ctx.strokeStyle = `rgba(0,229,255,${ca})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(mouse.x - cs, mouse.y); ctx.lineTo(mouse.x + cs, mouse.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(mouse.x, mouse.y - cs); ctx.lineTo(mouse.x, mouse.y + cs); ctx.stroke();
+      ctx.beginPath(); ctx.arc(mouse.x, mouse.y, 4, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(0,229,255,0.7)`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+  })();
+  </script>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+
+    const STORAGE_KEY = "flutter-roadmap-v1";
+
+    const phases = [
+      {
+        id: 1, title: "Phase 1", subtitle: "Dart & Flutter Setup", duration: "4–6 weeks",
+        color: "#00E5FF", glow: "rgba(0,229,255,0.35)", icon: "⚡",
+        topics: [
+          "Dart basics: variables, types, null safety, operators",
+          "Functions, arrow functions, optional & named parameters",
+          "OOP in Dart: classes, constructors, inheritance, mixins, abstract classes",
+          "Collections: List, Map, Set with generics",
+          "Async Dart: Future, async/await, Stream basics",
+          "Flutter SDK installation, Flutter Doctor, project structure",
+          "Hot reload vs hot restart — understanding the dev cycle",
+          "Running on Android Emulator, iOS Simulator, Chrome, Desktop",
+          "Understanding pubspec.yaml & dependency management",
+          "First apps: Counter, Hello World, simple To-Do list",
+        ],
+        projects: [
+          "Hello World app with custom fonts & colors",
+          "BMI Calculator (form inputs, conditionals)",
+          "Quiz App (basic state, multiple screens)",
+          "Simple Timer using Future & Stream",
+        ],
+      },
+      {
+        id: 2, title: "Phase 2", subtitle: "Core Widgets & Layouts", duration: "6–8 weeks",
+        color: "#7C4DFF", glow: "rgba(124,77,255,0.35)", icon: "🎨",
+        topics: [
+          "StatelessWidget vs StatefulWidget — when to use each",
+          "Widget tree, BuildContext, element tree, render tree",
+          "Layout widgets: Row, Column, Stack, Expanded, Flexible, Wrap",
+          "Container, Padding, SizedBox, ConstrainedBox, FractionallySizedBox",
+          "Scrolling: ListView, GridView, SingleChildScrollView, CustomScrollView, Slivers",
+          "Text, RichText, TextField, Form, FormField, validation",
+          "Images: AssetImage, NetworkImage, CachedNetworkImage",
+          "Buttons: ElevatedButton, TextButton, IconButton, FloatingActionButton",
+          "AppBar, BottomNavigationBar, Drawer, TabBar, BottomSheet, Snackbar, Dialog",
+          "Navigation: Navigator 1.0 push/pop, named routes, passing data between screens",
+          "go_router — declarative routing, deep links, query params",
+          "Theme: ThemeData, ColorScheme, TextTheme, dark/light mode",
+          "Responsive design: LayoutBuilder, MediaQuery, OrientationBuilder",
+          "Custom painting: CustomPaint, Canvas, Paint",
+          "Animations: AnimatedContainer, AnimatedOpacity, Hero, AnimationController",
+        ],
+        projects: [
+          "Chat UI clone (WhatsApp/Telegram style layout)",
+          "E-commerce product list with categories and a detail screen",
+          "Animated onboarding screens with PageView",
+          "Custom bottom navigation with animated indicator",
+          "Responsive dashboard (works on phone, tablet, web)",
+        ],
+      },
+      {
+        id: 3, title: "Phase 3", subtitle: "State Management", duration: "4–6 weeks",
+        color: "#FF4081", glow: "rgba(255,64,129,0.35)", icon: "🧠",
+        topics: [
+          "setState — what it does under the hood, when it re-renders",
+          "InheritedWidget & InheritedModel — foundation of all state solutions",
+          "Provider — ChangeNotifier, MultiProvider, Consumer, Selector",
+          "Riverpod — Providers, StateNotifier, AsyncNotifier, ref.watch/read/listen",
+          "Bloc/Cubit — Events, States, BlocBuilder, BlocListener, BlocConsumer",
+          "GetX — reactive state, controllers, bindings (overview)",
+          "When to use which: Riverpod for most apps, Bloc for large teams",
+          "Hydrated Bloc / Riverpod persistence across restarts",
+          "Optimistic updates and error states",
+          "Global state vs local state — architecture decisions",
+        ],
+        projects: [
+          "Shopping cart app with full add/remove/total logic using Riverpod",
+          "Authentication flow (login, signup, profile) using Bloc",
+          "Offline-capable notes app with state persistence",
+        ],
+      },
+      {
+        id: 4, title: "Phase 4", subtitle: "Backend, APIs & Storage", duration: "4–6 weeks",
+        color: "#00BFA5", glow: "rgba(0,191,165,0.35)", icon: "🔌",
+        topics: [
+          "HTTP: Dio vs http package, interceptors, base options, headers",
+          "REST API integration: GET/POST/PUT/DELETE, error handling, retries",
+          "JSON serialization: json_annotation, json_serializable, freezed",
+          "Firebase setup: FlutterFire CLI, google-services.json configuration",
+          "Firebase Auth: email/password, Google, Apple Sign-In",
+          "Cloud Firestore: CRUD, real-time listeners, queries, pagination",
+          "Firebase Storage: upload/download files and images",
+          "Firebase Cloud Messaging (FCM): push notifications, background handling",
+          "Local storage: SharedPreferences, Hive, Isar, SQLite (sqflite)",
+          "Secure storage: flutter_secure_storage for tokens/keys",
+          "GraphQL with Ferry or graphql_flutter",
+          "WebSockets & real-time data with web_socket_channel",
+        ],
+        projects: [
+          "Full CRUD social feed app (Firebase Firestore + Storage + Auth)",
+          "Weather app using a public REST API with Dio and Riverpod",
+          "Chat app with real-time Firestore listeners and push notifications",
+          "Offline-first app using Isar as local database with sync logic",
+        ],
+      },
+      {
+        id: 5, title: "Phase 5", subtitle: "Architecture & Clean Code", duration: "6–8 weeks",
+        color: "#FF6D00", glow: "rgba(255,109,0,0.35)", icon: "🏗️",
+        topics: [
+          "Clean Architecture: Presentation → Domain → Data layers",
+          "SOLID principles applied to Flutter & Dart",
+          "Repository Pattern — abstracting data sources",
+          "Use Cases / Interactors — single responsibility business logic",
+          "Dependency Injection: get_it + injectable, or Riverpod providers",
+          "Modular architecture: feature-first folder structure",
+          "Error handling: Either/Result types with dartz or fpdart",
+          "Unit testing: flutter_test, mocktail, fake implementations",
+          "Widget testing: finder, pump, pumpAndSettle",
+          "Integration testing: patrol, integration_test package",
+          "Test coverage: how to measure and improve it",
+          "Code generation: build_runner, freezed, auto_route",
+          "Linting & formatting: flutter_lints, custom analysis_options.yaml",
+        ],
+        projects: [
+          "Refactor a previous project to full Clean Architecture",
+          "Build a feature module with 80%+ test coverage",
+          "Create a shared reusable package used by multiple features",
+        ],
+      },
+      {
+        id: 6, title: "Phase 6", subtitle: "Advanced & Native Integration", duration: "6–8 weeks",
+        color: "#F9A825", glow: "rgba(249,168,37,0.35)", icon: "🚀",
+        topics: [
+          "Platform Channels: MethodChannel, EventChannel — call native iOS/Android code",
+          "Writing Kotlin (Android) and Swift (iOS) native plugins",
+          "Publishing packages to pub.dev",
+          "Flutter Plugin architecture — federated plugins",
+          "Advanced animations: Rive, Lottie, TweenAnimationBuilder, AnimatedBuilder",
+          "Custom Sliver widgets and scroll physics",
+          "Performance profiling: Flutter DevTools, frame timeline, memory tab",
+          "Jank elimination: const constructors, RepaintBoundary, avoid rebuilds",
+          "Isolates: compute(), Isolate.spawn — heavy background work",
+          "Dart FFI — calling C/C++ native libraries",
+          "Flutter Web: rendering engines (Canvaskit vs HTML), web-specific APIs",
+          "Flutter Desktop: windows, macOS, linux — packaging, installers",
+          "Accessibility: Semantics widget, screen reader support",
+          "Internationalization (i18n): intl package, ARB files, locale switching",
+          "Deep links & App Links (Android) / Universal Links (iOS)",
+          "Background execution: Workmanager, flutter_background_service",
+          "In-App Purchases: revenue_cat / in_app_purchase package",
+        ],
+        projects: [
+          "Custom Flutter plugin wrapping a native SDK (Bluetooth, NFC, or camera)",
+          "Highly-animated app using Rive + custom slivers, profiled to 60fps",
+          "Flutter web portfolio or dashboard deployed to production",
+          "Desktop app (Windows or macOS) with native menu bar integration",
+        ],
+      },
+      {
+        id: 7, title: "Phase 7", subtitle: "Pro Specialist", duration: "Ongoing",
+        color: "#E040FB", glow: "rgba(224,64,251,0.35)", icon: "👑",
+        topics: [
+          "App Store & Google Play submission: signing, provisioning profiles, review guidelines",
+          "Fastlane: automate screenshots, build, and deploy in one command",
+          "GitHub Actions / Bitrise / Codemagic: full CI/CD pipelines",
+          "Flavors & environments: dev, staging, production with different configs",
+          "Remote config with Firebase Remote Config or LaunchDarkly",
+          "Analytics: Firebase Analytics, Mixpanel — tracking meaningful events",
+          "Crash reporting: Sentry, Firebase Crashlytics — custom breadcrumbs",
+          "A/B testing and feature flags",
+          "Monorepo with Melos: managing multiple packages and apps",
+          "Contributing to Flutter SDK — filing issues, submitting PRs",
+          "Writing your own state management or utility package for pub.dev",
+          "Architecture Decision Records (ADRs) and tech documentation",
+          "Code review best practices and leading a Flutter team",
+          "Mentoring juniors and establishing team conventions",
+        ],
+        projects: [
+          "Publish a polished app to both App Store and Google Play",
+          "Set up end-to-end CI/CD so every merge to main deploys automatically",
+          "Publish an open-source Flutter package with documentation and tests",
+          "Contribute a bug fix or feature to the Flutter or Dart SDK",
+          "Lead or architect a multi-developer Flutter project",
+        ],
+      },
+    ];
+
+    const CUSTOM_KEY = "flutter-roadmap-custom-v1";
+
+    function load() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"); } catch { return {}; }
+    }
+    function save(data) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+    }
+    function loadCustom() {
+      try { return JSON.parse(localStorage.getItem(CUSTOM_KEY) || "{}"); } catch { return {}; }
+    }
+    function saveCustom(data) {
+      try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(data)); } catch {}
+    }
+
+    // ── ROBOTIC SOUND ENGINE (Web Audio API) ──────────────────────────
+    const audioCtx = { current: null };
+    function getCtx() {
+      if (!audioCtx.current) audioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
+      return audioCtx.current;
+    }
+
+    function robotSound(type) {
+      try {
+        const ctx = getCtx();
+        if (ctx.state === "suspended") ctx.resume();
+        const now = ctx.currentTime;
+
+        if (type === "check") {
+          // Rising robotic blip — marking complete
+          const osc = ctx.createOscillator();
+          const osc2 = ctx.createOscillator();
+          const gain = ctx.createGain();
+          const dist = ctx.createWaveShaper();
+          const curve = new Float32Array(256);
+          for (let i = 0; i < 256; i++) { const x = (i * 2) / 256 - 1; curve[i] = (Math.PI + 400) * x / (Math.PI + 400 * Math.abs(x)); }
+          dist.curve = curve;
+          osc.type = "square"; osc2.type = "sawtooth";
+          osc.frequency.setValueAtTime(220, now);
+          osc.frequency.linearRampToValueAtTime(660, now + 0.12);
+          osc2.frequency.setValueAtTime(440, now);
+          osc2.frequency.linearRampToValueAtTime(880, now + 0.12);
+          gain.gain.setValueAtTime(0.18, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+          osc.connect(dist); osc2.connect(dist); dist.connect(gain); gain.connect(ctx.destination);
+          osc.start(now); osc2.start(now); osc.stop(now + 0.25); osc2.stop(now + 0.25);
+
+        } else if (type === "uncheck") {
+          // Falling robotic beep — unchecking
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "square";
+          osc.frequency.setValueAtTime(440, now);
+          osc.frequency.linearRampToValueAtTime(180, now + 0.14);
+          gain.gain.setValueAtTime(0.15, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.start(now); osc.stop(now + 0.2);
+
+        } else if (type === "open") {
+          // Rapid digital scan — opening phase
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "sawtooth";
+          osc.frequency.setValueAtTime(300, now);
+          osc.frequency.setValueAtTime(450, now + 0.04);
+          osc.frequency.setValueAtTime(350, now + 0.08);
+          gain.gain.setValueAtTime(0.1, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.start(now); osc.stop(now + 0.16);
+
+        } else if (type === "close") {
+          // Short downward tick — closing
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "square";
+          osc.frequency.setValueAtTime(320, now);
+          osc.frequency.linearRampToValueAtTime(200, now + 0.08);
+          gain.gain.setValueAtTime(0.1, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.start(now); osc.stop(now + 0.12);
+
+        } else if (type === "add") {
+          // Ascending 3-tone — adding topic
+          [0, 0.08, 0.16].forEach((t, i) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = "square";
+            osc.frequency.value = [330, 440, 660][i];
+            gain.gain.setValueAtTime(0.13, now + t);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + t + 0.1);
+            osc.connect(gain); gain.connect(ctx.destination);
+            osc.start(now + t); osc.stop(now + t + 0.12);
+          });
+
+        } else if (type === "delete") {
+          // Glitchy noise burst — deleting
+          const buf = ctx.createBuffer(1, ctx.sampleRate * 0.12, ctx.sampleRate);
+          const data = buf.getChannelData(0);
+          for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+          const src = ctx.createBufferSource();
+          const gain = ctx.createGain();
+          const filter = ctx.createBiquadFilter();
+          filter.type = "bandpass"; filter.frequency.value = 800; filter.Q.value = 2;
+          src.buffer = buf;
+          gain.gain.setValueAtTime(0.2, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+          src.connect(filter); filter.connect(gain); gain.connect(ctx.destination);
+          src.start(now);
+
+        } else if (type === "celebrate") {
+          // Victory fanfare — phase complete
+          const notes = [523, 659, 784, 1047];
+          notes.forEach((freq, i) => {
+            const osc = ctx.createOscillator();
+            const osc2 = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = "square"; osc2.type = "sawtooth";
+            osc.frequency.value = freq; osc2.frequency.value = freq * 1.5;
+            gain.gain.setValueAtTime(0, now + i * 0.1);
+            gain.gain.linearRampToValueAtTime(0.15, now + i * 0.1 + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.1 + 0.15);
+            osc.connect(gain); osc2.connect(gain); gain.connect(ctx.destination);
+            osc.start(now + i * 0.1); osc2.start(now + i * 0.1);
+            osc.stop(now + i * 0.1 + 0.18); osc2.stop(now + i * 0.1 + 0.18);
+          });
+        }
+      } catch(e) {}
+    }
+    // ─────────────────────────────────────────────────────────────────
+
+    function App() {
+      const [state, setState] = useState(() => load());
+      const [customTopics, setCustomTopics] = useState(() => loadCustom()); // { phaseId: [{id, text}] }
+      const [activePhase, setActivePhase] = useState(null);
+      const [celebrating, setCelebrating] = useState(null);
+      const [confetti, setConfetti] = useState([]);
+      const [addingTo, setAddingTo] = useState(null); // phaseId currently showing input
+      const [inputVal, setInputVal] = useState("");
+      const [copied, setCopied] = useState(null);
+
+      const copyText = (text, key) => {
+        const doFallback = () => {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.cssText = "position:fixed;top:-999px;left:-999px;opacity:0;";
+          document.body.appendChild(ta);
+          ta.focus(); ta.select();
+          try { document.execCommand("copy"); } catch(e) {}
+          document.body.removeChild(ta);
+          robotSound("open");
+          setCopied(key);
+          setTimeout(() => setCopied(null), 1800);
+        };
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(() => {
+            robotSound("open");
+            setCopied(key);
+            setTimeout(() => setCopied(null), 1800);
+          }).catch(() => doFallback());
+        } else {
+          doFallback();
+        }
+      };
+
+      const toggle = (key) => {
+        const next = { ...state, [key]: !state[key] };
+        const isChecking = !state[key];
+        robotSound(isChecking ? "check" : "uncheck");
+        setState(next);
+        save(next);
+        if (isChecking) {
+          setCelebrating(key);
+          setTimeout(() => setCelebrating(null), 700);
+          spawnConfetti();
+          // check if this completed a phase
+          setTimeout(() => {
+            phases.forEach(p => {
+              const allDone = p.topics.every((_, i) => next[`t-${p.id}-${i}`]);
+              const wasAllDone = p.topics.every((_, i) => state[`t-${p.id}-${i}`]);
+              if (allDone && !wasAllDone) robotSound("celebrate");
+            });
+          }, 250);
+        }
+      };
+
+      const spawnConfetti = () => {
+        const pieces = Array.from({ length: 18 }, (_, i) => ({
+          id: Date.now() + i,
+          x: 40 + Math.random() * 20,
+          color: ["#00E5FF","#7C4DFF","#FF4081","#00BFA5","#F9A825","#E040FB"][Math.floor(Math.random()*6)],
+          delay: Math.random() * 0.3,
+          size: 4 + Math.random() * 6,
+          angle: Math.random() * 360,
+        }));
+        setConfetti(pieces);
+        setTimeout(() => setConfetti([]), 1200);
+      };
+
+      const addCustomTopic = (phaseId) => {
+        const text = inputVal.trim();
+        if (!text) return;
+        robotSound("add");
+        const existing = customTopics[phaseId] || [];
+        const newTopic = { id: `c-${phaseId}-${Date.now()}`, text };
+        const next = { ...customTopics, [phaseId]: [...existing, newTopic] };
+        setCustomTopics(next);
+        saveCustom(next);
+        setInputVal("");
+        setAddingTo(null);
+      };
+
+      const deleteCustomTopic = (phaseId, topicId) => {
+        robotSound("delete");
+        const existing = customTopics[phaseId] || [];
+        const next = { ...customTopics, [phaseId]: existing.filter(t => t.id !== topicId) };
+        setCustomTopics(next);
+        saveCustom(next);
+        // also clear toggle state
+        const ns = { ...state };
+        delete ns[topicId];
+        setState(ns);
+        save(ns);
+      };
+
+      const togglePhase = (phaseId) => {
+        const isOpening = activePhase !== phaseId;
+        robotSound(isOpening ? "open" : "close");
+        setActivePhase(isOpening ? phaseId : null);
+      };
+
+      const getPhaseProgress = (phase) => {
+        const builtInDone = phase.topics.filter((_, i) => state[`t-${phase.id}-${i}`]).length;
+        const custom = customTopics[phase.id] || [];
+        const customDone = custom.filter(t => state[t.id]).length;
+        const done = builtInDone + customDone;
+        const total = phase.topics.length + custom.length;
+        const projDone = phase.projects.filter((_, i) => state[`p-${phase.id}-${i}`]).length;
+        return { done, total, projDone, projTotal: phase.projects.length, pct: total > 0 ? Math.round((done / total) * 100) : 0 };
+      };
+
+      const totalTopics = phases.reduce((s, p) => {
+        const custom = customTopics[p.id] || [];
+        return s + p.topics.length + custom.length;
+      }, 0);
+      const totalDone = phases.reduce((s, p) => {
+        const builtIn = p.topics.filter((_, i) => state[`t-${p.id}-${i}`]).length;
+        const custom = (customTopics[p.id] || []).filter(t => state[t.id]).length;
+        return s + builtIn + custom;
+      }, 0);
+      const totalPct = totalTopics > 0 ? Math.round((totalDone / totalTopics) * 100) : 0;
+
+      return (
+        <div style={{ background:"#070B14", minHeight:"100vh", fontFamily:"'Space Mono',monospace", color:"#E0E0E0", overflowX:"hidden" }}>
+          <style>{`
+            .phase-card { background:rgba(13,17,23,0.85); border:1px solid rgba(255,255,255,0.06); border-radius:16px; margin-bottom:12px; overflow:hidden; transition:border-color 0.3s, box-shadow 0.3s; backdrop-filter:blur(10px); }
+            .phase-header { display:flex; align-items:center; padding:20px 24px; cursor:pointer; gap:16px; user-select:none; transition:background 0.2s; }
+            .phase-header:hover { background:rgba(255,255,255,0.025); }
+            .topic-row { display:flex; align-items:flex-start; gap:12px; padding:10px 14px; border-radius:8px; cursor:pointer; transition:background 0.15s; user-select:none; }
+            .topic-row:hover { background:rgba(255,255,255,0.04); }
+            .chk { width:20px; height:20px; border-radius:5px; border:2px solid rgba(255,255,255,0.18); flex-shrink:0; margin-top:1px; display:flex; align-items:center; justify-content:center; transition:all 0.2s; font-size:11px; font-weight:700; }
+            .chk-circle { border-radius:50%; }
+            @keyframes pop { 0%{transform:scale(1)} 40%{transform:scale(1.35)} 100%{transform:scale(1)} }
+            .popping { animation:pop 0.4s ease; }
+            @keyframes fadeDown { from{opacity:0;transform:translateY(-10px)} to{opacity:1;transform:translateY(0)} }
+            .fade-down { animation:fadeDown 0.25s ease; }
+            @keyframes heroIn { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:translateY(0)} }
+            .h1 { animation:heroIn 0.7s ease forwards; }
+            .h2 { animation:heroIn 0.7s 0.12s ease forwards; opacity:0; }
+            .h3 { animation:heroIn 0.7s 0.24s ease forwards; opacity:0; }
+            .h4 { animation:heroIn 0.7s 0.36s ease forwards; opacity:0; }
+            @keyframes gridPulse { 0%,100%{opacity:0.025} 50%{opacity:0.055} }
+            .grid-bg { position:fixed;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:0; background-image:linear-gradient(rgba(0,229,255,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,0.04) 1px,transparent 1px); background-size:48px 48px; animation:gridPulse 5s ease-in-out infinite; }
+            @keyframes confettiFall { 0%{opacity:1;transform:translateY(0) rotate(0deg)} 100%{opacity:0;transform:translateY(80px) rotate(720deg)} }
+            .confetti-piece { position:fixed; border-radius:2px; animation:confettiFall 1s ease forwards; pointer-events:none; z-index:9999; }
+            @keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+            .progress-bar-inner { background-size:200% 100%; }
+            .mini-badge { display:inline-flex;align-items:center;gap:4px;border-radius:20px;padding:2px 8px;font-size:0.6rem;letter-spacing:0.08em; }
+            .add-topic-btn { display:flex;align-items:center;gap:8px;width:100%;padding:9px 14px;border-radius:8px;border:1px dashed rgba(255,255,255,0.12);background:transparent;color:#4A5568;font-family:'Space Mono',monospace;font-size:0.72rem;cursor:pointer;transition:all 0.2s;margin-top:6px;letter-spacing:0.04em; }
+            .add-topic-btn:hover { border-color:rgba(255,255,255,0.25);color:#A0AEC0;background:rgba(255,255,255,0.03); }
+            .topic-input { width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:10px 14px;color:#E0E0E0;font-family:'Space Mono',monospace;font-size:0.78rem;outline:none;transition:border-color 0.2s; }
+            .topic-input:focus { border-color:rgba(255,255,255,0.3); }
+            .topic-input::placeholder { color:#3A4A5A; }
+            .del-btn { opacity:0;width:20px;height:20px;border-radius:4px;border:none;background:rgba(255,80,80,0.15);color:#FF5050;font-size:0.7rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.15s;margin-top:1px; }
+            .topic-row:hover .del-btn { opacity:1; }
+            .del-btn:hover { background:rgba(255,80,80,0.3); }
+            .copy-btn { opacity:0;width:32px;height:32px;border-radius:6px;border:none;background:rgba(0,229,255,0.12);color:#00E5FF;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.15s;margin-top:0px; }
+            .topic-row:hover .copy-btn { opacity:1; }
+            .copy-btn:hover { background:rgba(0,229,255,0.28); transform:scale(1.08); }
+            .copy-btn.copied-flash { opacity:1 !important; background:rgba(0,229,255,0.35); color:#fff; }
+            @keyframes copyPop { 0%{transform:scale(1)} 50%{transform:scale(1.3)} 100%{transform:scale(1)} }
+            .copy-btn.copied-flash { animation:copyPop 0.3s ease; }
+            @keyframes slideIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
+            .slide-in { animation:slideIn 0.2s ease; }
+            @media(max-width:600px){.phase-header{padding:14px 16px;gap:12px}.hero-stats{flex-direction:column}.stat-pill{font-size:0.6rem}}
+          `}</style>
+
+          <div className="grid-bg"/>
+
+          {/* Confetti */}
+          {confetti.map(c => (
+            <div key={c.id} className="confetti-piece" style={{
+              left:`${c.x}%`, top:"30%",
+              width:c.size, height:c.size,
+              background:c.color,
+              animationDelay:`${c.delay}s`,
+              transform:`rotate(${c.angle}deg)`,
+            }}/>
+          ))}
+
+          <div style={{ position:"relative", zIndex:1, maxWidth:880, margin:"0 auto", padding:"0 16px 80px" }}>
+
+            {/* HERO */}
+            <div style={{ textAlign:"center", padding:"56px 0 44px" }}>
+              <div className="h1" style={{ display:"inline-block", background:"linear-gradient(135deg,#00E5FF22,#7C4DFF22)", border:"1px solid rgba(0,229,255,0.3)", borderRadius:10, padding:"7px 22px", fontSize:"0.9rem", letterSpacing:"0.2em", color:"#00E5FF", marginBottom:22, fontFamily:"'Orbitron',monospace" }}>
+                FLUTTER MASTERY TRACKER
+              </div>
+
+              <div className="h3">
+                <p style={{ color:"#5A6A7E", fontSize:"0.82rem", letterSpacing:"0.05em", marginBottom:36 }}>
+                  7 phases · {totalTopics} topics · Click anything to mark it complete
+                </p>
+              </div>
+
+              {/* OVERALL PROGRESS CARD */}
+              <div className="h4" style={{ background:"rgba(13,17,23,0.92)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:20, padding:"28px 28px", marginBottom:16 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:28, flexWrap:"wrap", justifyContent:"center" }}>
+                  {/* Ring */}
+                  <div style={{ position:"relative", width:108, height:108, flexShrink:0 }}>
+                    <svg width="108" height="108" style={{ transform:"rotate(-90deg)" }}>
+                      <defs>
+                        <linearGradient id="rg" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%" stopColor="#00E5FF"/>
+                          <stop offset="100%" stopColor="#7C4DFF"/>
+                        </linearGradient>
+                      </defs>
+                      <circle cx="54" cy="54" r="45" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="8"/>
+                      <circle cx="54" cy="54" r="45" fill="none" stroke="url(#rg)" strokeWidth="8"
+                        strokeDasharray={`${2*Math.PI*45}`}
+                        strokeDashoffset={`${2*Math.PI*45*(1-totalPct/100)}`}
+                        strokeLinecap="round"
+                        style={{ transition:"stroke-dashoffset 0.8s ease" }}
+                      />
+                    </svg>
+                    <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
+                      <div style={{ fontFamily:"'Syne',sans-serif", fontSize:"1.5rem", fontWeight:800, color:"#FFF" }}>{totalPct}%</div>
+                      <div style={{ fontSize:"0.55rem", color:"#4A5568", letterSpacing:"0.08em" }}>DONE</div>
+                    </div>
+                  </div>
+
+                  <div style={{ textAlign:"left", minWidth:0 }}>
+                    <div style={{ fontFamily:"'Orbitron',sans-serif", fontSize:"1.3rem", fontWeight:700, color:"#FFF", marginBottom:6 }}>Overall Mastery</div>
+                    <div style={{ fontSize:"0.73rem", color:"#5A6A7E", marginBottom:16 }}>
+                      {totalDone} of {totalTopics} topics completed
+                    </div>
+                    <div className="hero-stats" style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                      {phases.map(p => {
+                        const { pct } = getPhaseProgress(p);
+                        return (
+                          <div key={p.id} className="stat-pill"
+                            onClick={() => setActivePhase(activePhase === p.id ? null : p.id)}
+                            style={{
+                              display:"inline-flex", alignItems:"center", gap:5, cursor:"pointer",
+                              background: pct===100 ? `${p.color}20` : "rgba(255,255,255,0.04)",
+                              border:`1px solid ${pct===100 ? p.color+"55" : "rgba(255,255,255,0.07)"}`,
+                              borderRadius:6, padding:"4px 9px",
+                              fontSize:"0.65rem", color: pct===100 ? p.color : "#5A6A7E",
+                              transition:"all 0.2s",
+                            }}>
+                            <span>{p.icon}</span>
+                            <span style={{ fontFamily:"'Space Mono'" }}>P{p.id} {pct}%</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* PHASES */}
+            {phases.map(phase => {
+              const { done, total, projDone, projTotal, pct } = getPhaseProgress(phase);
+              const isOpen = activePhase === phase.id;
+              const isComplete = pct === 100;
+
+              return (
+                <div key={phase.id} className="phase-card"
+                  style={{ borderColor: isOpen ? `${phase.color}30` : undefined, boxShadow: isOpen ? `0 0 28px ${phase.glow}` : "none" }}>
+
+                  {/* Header */}
+                  <div className="phase-header" onClick={() => togglePhase(phase.id)}>
+                    <div style={{ background:`${phase.color}18`, border:`1px solid ${phase.color}40`, borderRadius:10, width:44, height:44, display:"flex", alignItems:"center", justifyContent:"center", fontSize:"1.2rem", flexShrink:0 }}>
+                      {phase.icon}
+                    </div>
+
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:5, flexWrap:"wrap" }}>
+                        <span style={{ fontFamily:"'Orbitron',sans-serif", fontWeight:700, fontSize:"1.1rem", color:phase.color }}>{phase.title}</span>
+                        <span style={{ fontSize:"0.82rem", color:"#A0AEC0", fontFamily:"'Syne',sans-serif", fontWeight:600 }}>{phase.subtitle}</span>
+                        {isComplete && (
+                          <span className="mini-badge" style={{ background:`${phase.color}20`, border:`1px solid ${phase.color}55`, color:phase.color }}>
+                            ✓ COMPLETE
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                        <div style={{ flex:1, height:4, background:"rgba(255,255,255,0.05)", borderRadius:2, overflow:"hidden", maxWidth:180 }}>
+                          <div style={{ height:"100%", width:`${pct}%`, background:`linear-gradient(90deg,${phase.color},${phase.color}88)`, borderRadius:2, transition:"width 0.5s ease", boxShadow: pct>0 ? `0 0 8px ${phase.glow}` : "none" }}/>
+                        </div>
+                        <span style={{ fontSize:"0.62rem", color:"#4A5568", whiteSpace:"nowrap", fontFamily:"'Space Mono'" }}>{done}/{total} topics</span>
+
+                      </div>
+                    </div>
+
+                    <div style={{ color:"#3A4A5A", fontSize:"0.75rem", flexShrink:0, transform:isOpen?"rotate(180deg)":"rotate(0deg)", transition:"transform 0.25s ease" }}>▼</div>
+                  </div>
+
+                    {/* Body */}
+                  {isOpen && (
+                    <div className="fade-down" style={{ padding:"4px 20px 24px" }}>
+
+                      {/* Topics */}
+                      <div style={{ fontSize:"0.58rem", letterSpacing:"0.14em", color:"#3A4A5A", marginBottom:10, paddingLeft:4 }}>
+                        TOPICS — tap to mark complete
+                      </div>
+                      <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.05)", borderRadius:10, padding:"6px", marginBottom:20 }}>
+                        {/* Built-in topics */}
+                        {phase.topics.map((topic, i) => {
+                          const key = `t-${phase.id}-${i}`;
+                          const isDone = !!state[key];
+                          const isPopping = celebrating === key;
+                          const isCopied = copied === key;
+                          return (
+                            <div key={i} className="topic-row" onClick={() => toggle(key)}>
+                              <div className={`chk${isPopping?" popping":""}`} style={{ background:isDone?phase.color:"transparent", borderColor:isDone?phase.color:"rgba(255,255,255,0.15)", boxShadow:isDone?`0 0 8px ${phase.glow}`:"none", color:"#000" }}>
+                                {isDone && "✓"}
+                              </div>
+                              <span style={{ fontSize:"0.78rem", color:isDone?"#4A5568":"#B8C4D0", textDecoration:isDone?"line-through":"none", lineHeight:1.55, transition:"color 0.2s", flex:1 }}>{topic}</span>
+                              <button className={`copy-btn${isCopied?" copied-flash":""}`} title="Copy topic" onClick={(e) => { e.stopPropagation(); copyText(topic, key); }}>
+                                {isCopied ? "✓" : "⎘"}
+                              </button>
+                            </div>
+                          );
+                        })}
+
+                        {/* Custom topics */}
+                        {(customTopics[phase.id] || []).map((ct) => {
+                          const isDone = !!state[ct.id];
+                          const isPopping = celebrating === ct.id;
+                          const isCopied = copied === ct.id;
+                          return (
+                            <div key={ct.id} className="topic-row slide-in" style={{ position:"relative" }} onClick={(e) => { if (e.target.closest(".del-btn") || e.target.closest(".copy-btn")) return; toggle(ct.id); }}>
+                              <div className={`chk${isPopping?" popping":""}`} style={{ background:isDone?phase.color:"transparent", borderColor:isDone?phase.color:`${phase.color}55`, boxShadow:isDone?`0 0 8px ${phase.glow}`:"none", color:"#000" }}>
+                                {isDone && "✓"}
+                              </div>
+                              <span style={{ fontSize:"0.78rem", color:isDone?"#4A5568":"#B8C4D0", textDecoration:isDone?"line-through":"none", lineHeight:1.55, flex:1 }}>
+                                {ct.text}
+                              </span>
+                              <span style={{ fontSize:"0.55rem", color:`${phase.color}88`, letterSpacing:"0.06em", marginRight:4, flexShrink:0 }}>CUSTOM</span>
+                              <button className={`copy-btn${isCopied?" copied-flash":""}`} title="Copy topic" onClick={(e) => { e.stopPropagation(); copyText(ct.text, ct.id); }}>
+                                {isCopied ? "✓" : "⎘"}
+                              </button>
+                              <button className="del-btn" onClick={(e) => { e.stopPropagation(); deleteCustomTopic(phase.id, ct.id); }}>✕</button>
+                            </div>
+                          );
+                        })}
+
+                        {/* Add topic input */}
+                        {addingTo === phase.id ? (
+                          <div className="slide-in" style={{ padding:"8px 6px 4px", display:"flex", flexDirection:"column", gap:8 }}>
+                            <input
+                              className="topic-input"
+                              autoFocus
+                              placeholder="Type your custom topic and press Enter…"
+                              value={inputVal}
+                              onChange={e => setInputVal(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === "Enter") addCustomTopic(phase.id);
+                                if (e.key === "Escape") { setAddingTo(null); setInputVal(""); }
+                              }}
+                              style={{ borderColor:`${phase.color}44` }}
+                            />
+                            <div style={{ display:"flex", gap:8 }}>
+                              <button onClick={() => addCustomTopic(phase.id)} style={{ flex:1, padding:"8px", borderRadius:7, border:"none", background:phase.color, color:"#000", fontFamily:"'Space Mono',monospace", fontSize:"0.72rem", fontWeight:700, cursor:"pointer", letterSpacing:"0.06em" }}>
+                                + ADD TOPIC
+                              </button>
+                              <button onClick={() => { setAddingTo(null); setInputVal(""); }} style={{ padding:"8px 14px", borderRadius:7, border:"1px solid rgba(255,255,255,0.1)", background:"transparent", color:"#5A6A7E", fontFamily:"'Space Mono',monospace", fontSize:"0.72rem", cursor:"pointer" }}>
+                                CANCEL
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button className="add-topic-btn" onClick={() => { robotSound("open"); setAddingTo(phase.id); setInputVal(""); }}
+                            style={{ borderColor:`${phase.color}30`, color:`${phase.color}88` }}>
+                            <span style={{ fontSize:"1rem", lineHeight:1 }}>＋</span>
+                            Add custom topic to {phase.title}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Projects */}
+                      <div style={{ fontSize:"0.58rem", letterSpacing:"0.14em", color:"#3A4A5A", marginBottom:10, paddingLeft:4 }}>
+                        🏗 PROJECTS TO BUILD — {projDone}/{projTotal} completed
+                      </div>
+                      <div style={{ background:`${phase.color}08`, border:`1px solid ${phase.color}20`, borderRadius:10, padding:"6px" }}>
+                        {phase.projects.map((proj, i) => {
+                          const key = `p-${phase.id}-${i}`;
+                          const isDone = !!state[key];
+                          const isPopping = celebrating === key;
+                          const isCopied = copied === `copy-${key}`;
+                          return (
+                            <div key={i} className="topic-row" onClick={() => toggle(key)}>
+                              <div className={`chk chk-circle${isPopping?" popping":""}`} style={{ background:isDone?phase.color:"transparent", borderColor:isDone?phase.color:`${phase.color}44`, boxShadow:isDone?`0 0 8px ${phase.glow}`:"none", color:"#000" }}>
+                                {isDone && "✓"}
+                              </div>
+                              <span style={{ fontSize:"0.78rem", color:isDone?"#4A5568":"#B8C4D0", textDecoration:isDone?"line-through":"none", lineHeight:1.55, flex:1 }}>{proj}</span>
+                              <button className={`copy-btn${isCopied?" copied-flash":""}`} title="Copy project" onClick={(e) => { e.stopPropagation(); copyText(proj, `copy-${key}`); }}>
+                                {isCopied ? "✓" : "⎘"}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* FOOTER */}
+            <div style={{ textAlign:"center", padding:"40px 0 0", color:"#1E2A3A", fontSize:"0.65rem", letterSpacing:"0.12em" }}>
+              FLUTTER ULTRA PRO ROADMAP · PROGRESS SAVED IN YOUR BROWSER
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  </script>
+</body>
+</html>
